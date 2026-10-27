@@ -12,7 +12,7 @@
 
 ## Windows native CI
 
-GitHub Actions runs the shared tests on Windows and macOS, compiles the Swift UI, launches the Windows GUI executable and checks `/v1/info` reports v0.2.0. The workflow is a launch smoke check; it does not validate Explorer gestures, layout rendering, or SmartScreen.
+[GitHub Actions run 40457342739](https://github.com/cjx12036/LocalBucket/actions/runs/40457342739) passed for code commit `a9388f2`: shared tests on Windows and macOS, Swift UI compilation, and Windows GUI launch with `/v1/info` reporting v0.2.0. The workflow is a launch smoke check; it does not validate Explorer gestures, layout rendering, or SmartScreen.
 
 ## Still requires device verification
 

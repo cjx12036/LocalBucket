@@ -38,7 +38,7 @@ Files: app/cmd/localbucket/*.go only. Same contracts/behaviors as Mac; one prepa
 ### Task 4: Documentation, package and release
 Files: README.md, README.en.md, app/README.md, app/build.py, app/resources/winres.json, workflow, docs/validation-v0.2.md.
 - [x] Concise Chinese default and English linked README; motivation, download/use, no sync, local delete, LAN permissions, SmartScreen and Mac Gatekeeper limitations.
-- [ ] Version 0.2.0; build both apps, tests/race/vet, packaging/signature checks; fresh review and fix important findings.
+- [x] Version 0.2.0; build both apps, tests/race/vet, packaging/signature checks; fresh review and fix important findings.
 - [ ] Commit/push feature branch, update PR, run CI; publish v0.2.0-preview.1 assets and verify GitHub digests.
 
 ## Ledger
@@ -46,3 +46,5 @@ Ruling: Reuse current codex/localbucket-v0.1 feature branch (not main), with dis
 Ruling: Implementation runs in this session; dispatch independent native platform tasks under dispatching-parallel-agents, root handles shared API/docs/integration.
 
 Review: mixed-save temporary cache leak fixed with red/green regression. Mac folder online status now refreshes independently. Full 23-test race suite plus real Dufs/UDP discovery passes. Mac packaged root Add and local Trash tested with one synthetic fixture; actual new physical cross-device drag remains a device check.
+
+CI: Windows and macOS success at https://github.com/cjx12036/LocalBucket/actions/runs/40457342739 for a9388f2. Publishing authorized by user; plan/documentation recording commit does not alter executable code.
