@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const Version = "0.2.0"
+const Version = "0.2.1"
 
 type Options struct {
 	DataDir, DufsPath, Name string
