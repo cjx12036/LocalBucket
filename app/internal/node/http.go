@@ -118,6 +118,8 @@ func (s *Service) adminHandler() http.Handler {
 }
 func (s *Service) adminGet(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/app/space":
+		writeJSON(w, s.space(r.Context()))
 	case "/app/peers":
 		writeJSON(w, map[string]any{"peers": s.allPeers()})
 	case "/app/list":
@@ -160,13 +162,14 @@ func (s *Service) adminGet(w http.ResponseWriter, r *http.Request) {
 }
 
 type action struct {
-	Peer        string   `json:"peer"`
-	Path        string   `json:"path"`
-	Paths       []string `json:"paths"`
-	Sources     []string `json:"sources"`
-	Destination string   `json:"destination"`
-	Job         string   `json:"job"`
-	GuideSeen   bool     `json:"guide_seen"`
+	Items       []Selection `json:"items"`
+	Peer        string      `json:"peer"`
+	Path        string      `json:"path"`
+	Paths       []string    `json:"paths"`
+	Sources     []string    `json:"sources"`
+	Destination string      `json:"destination"`
+	Job         string      `json:"job"`
+	GuideSeen   bool        `json:"guide_seen"`
 }
 
 func (s *Service) adminPost(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +208,10 @@ func (s *Service) adminPost(w http.ResponseWriter, r *http.Request) {
 			a.Sources = []string{legacyDir()}
 		}
 		p, e := s.peer(a.Peer)
+		var selections []ownedSelection
+		if a.Items != nil && (r.URL.Path == "/app/prepare" || r.URL.Path == "/app/save") {
+			selections, e = s.resolveSelections(a.Items)
+		}
 		if e != nil {
 			fail(w, e, 404)
 			return
@@ -220,7 +227,7 @@ func (s *Service) adminPost(w http.ResponseWriter, r *http.Request) {
 			fail(w, errors.New("请选择要添加的文件"), 400)
 			return
 		}
-		if kind != "import" && len(a.Paths) == 0 {
+		if kind != "import" && len(a.Paths) == 0 && len(selections) == 0 {
 			fail(w, errors.New("请选择文件"), 400)
 			return
 		}
@@ -239,13 +246,23 @@ func (s *Service) adminPost(w http.ResponseWriter, r *http.Request) {
 				v, e := s.importTo(ctx, jid, p, a.Path, a.Sources)
 				return v, nil, e
 			}
-			ps, e := s.prepare(ctx, jid, p, a.Paths)
+			if kind == "save" && !filepath.IsAbs(a.Destination) {
+				return Result{}, nil, errors.New("请选择本机目标文件夹")
+			}
+			var ps []string
+			var e error
+			if len(selections) > 0 {
+				ps, e = s.prepareSelections(ctx, jid, selections)
+			} else {
+				ps, e = s.prepare(ctx, jid, p, a.Paths)
+			}
 			if e != nil {
 				return Result{}, nil, e
 			}
 			if kind == "save" {
-				if !filepath.IsAbs(a.Destination) {
-					return Result{}, nil, errors.New("请选择本机目标文件夹")
+				// Save consumes prepared copies immediately; only drag jobs keep caches.
+				if len(ps) > 0 && (len(selections) > 0 || !p.Local) {
+					defer os.RemoveAll(filepath.Dir(ps[0]))
 				}
 				tempStore, e := NewExportStore(a.Destination, s.DataDir)
 				if e != nil {

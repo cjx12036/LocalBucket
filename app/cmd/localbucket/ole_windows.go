@@ -250,12 +250,16 @@ var acceptingDrop bool
 
 func targetEnter(this, data, keys, pt, effect uintptr) uintptr {
 	f := format{CF: 15, Aspect: 1, Index: -1, Tymed: 1}
-	acceptingDrop = effect != 0 && *(*uint32)(unsafe.Pointer(effect))&1 != 0 && selectedPeer != nil && comCall(data, 5, uintptr(unsafe.Pointer(&f))) == 0
+	acceptingDrop = effect != 0 && *(*uint32)(unsafe.Pointer(effect))&1 != 0 && comCall(data, 5, uintptr(unsafe.Pointer(&f))) == 0
 	if effect != 0 {
 		*(*uint32)(unsafe.Pointer(effect)) = 0
 		if acceptingDrop {
 			*(*uint32)(unsafe.Pointer(effect)) = 1
-			report("添加到「" + selectedPeer.Name + " / " + currentPath + "」 — 松开鼠标复制文件")
+			name := "本机存储桶"
+			if selectedPeer != nil {
+				name = selectedPeer.Name + " / " + currentPath
+			}
+			report("添加到「" + name + "」 — 松开鼠标复制文件")
 			call(user, "SetWindowLongPtrW", list, ^uintptr(19), call(user, "GetWindowLongPtrW", list, ^uintptr(19))|0x200)
 			call(user, "SetWindowPos", list, 0, 0, 0, 0, 0, 0x27)
 		} else {
@@ -288,7 +292,7 @@ func targetDrop(this, data, keys, pt, effect uintptr) uintptr {
 		return 0
 	}
 	acceptingDrop = false
-	if dragActive && selectedPeer != nil && dragPeer == selectedPeer.ID && dragPath == currentPath {
+	if sameDragDestination() {
 		report("文件已在这里，无需重复添加")
 		return 0
 	}
@@ -342,7 +346,7 @@ func runDrag(paths []string) bool {
 	defer release(o)
 	defer release(s)
 	dragActive = true
-	dragPeer = selectedPeer.ID
+	dragPeer = destinationPeer()
 	dragPath = currentPath
 	defer func() { dragActive = false }()
 	var effect uint32

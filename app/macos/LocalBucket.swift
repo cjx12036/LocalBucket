@@ -5,12 +5,13 @@ import Darwin
 private struct Peer {
     let id: String, name: String
     let local: Bool, online: Bool
-    var title: String { local ? "我的电脑 · \(name)" : name }
 }
 private struct Entry {
     let name: String, path: String
     let directory: Bool
     let size: Int64, modified: Double
+    let peer: String, owner: String, local: Bool
+    var identity: String { peer + "\0" + path }
 }
 private struct ServiceInfo {
     let base: URL, token: String, bucket: URL
@@ -68,8 +69,12 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     private let breadcrumb = NSStackView()
     private let search = NSSearchField()
     private let state = NSTextField(wrappingLabelWithString: "正在启动本机共享…")
+    private let online = NSTextField(labelWithString: "正在连接…")
+    private var unavailableCount = 0
+    private var folderError: String?
+    private var peerStatusError = false
     private let empty = NSTextField(wrappingLabelWithString: "")
-    private let guide = NSTextField(wrappingLabelWithString: "本机 bucket 是独立的存储文件夹。打开一台电脑后拖入文件即可存放；拖到桌面或文件夹即可复制，原文件保留。")
+    private let guide = NSTextField(wrappingLabelWithString: "拖入存到本机，拖出复制并保留原文件。打开文件夹后，添加到它所在的电脑。")
     private let progress = NSProgressIndicator()
     private var addButton: NSButton!, saveButton: NSButton!, deleteButton: NSButton!, cancelButton: NSButton!, retryButton: NSButton!
     private var service: ServiceInfo?
@@ -78,13 +83,13 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     private var peers: [Peer] = [], files: [Entry] = [], filtered: [Entry] = []
     private var selectedPeer: Peer?, directory = ""
     private var listGeneration = 0
-    private var peerBusy = false, jobBusy = false, listBusy = false
+    private var jobBusy = false, listBusy = false, peerBusy = false
     private var peerTimer: Timer?, jobTimer: Timer?
     private var activeJobs: [String] = [], seenJobs: [String: String] = [:]
     private var retryAction: (() -> Void)?
     private var jobRetries: [String: () -> Void] = [:]
     private var promises: [DownloadPromise] = []
-    private var dragOrigin: (String, String)?
+    private var dragOrigin: (String?, String)?
     private var quitting = false
     private var downloads: [UUID: URLSessionDownloadTask] = [:]
     private var pendingSubmissions = 0
@@ -120,25 +125,25 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         let layout = NSStackView(); layout.orientation = .vertical; layout.alignment = .leading; layout.spacing = 14
         layout.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(layout)
         NSLayoutConstraint.activate([layout.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24), layout.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24), layout.topAnchor.constraint(equalTo: content.topAnchor, constant: 20), layout.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18)])
-        let heading = NSTextField(labelWithString: "LocalBucket"); heading.font = .systemFont(ofSize: 27, weight: .semibold)
-        let subtitle = NSTextField(labelWithString: "让文件在附近的电脑之间轻松流动"); subtitle.textColor = .secondaryLabelColor
-        layout.addArrangedSubview(heading); layout.addArrangedSubview(subtitle)
-        guide.textColor = .secondaryLabelColor; guide.font = .systemFont(ofSize: 12)
-        layout.addArrangedSubview(guide)
-        guide.widthAnchor.constraint(equalTo: layout.widthAnchor).isActive = true
-        let tools = NSStackView(); tools.spacing = 8
+        let header = NSStackView(); header.spacing = 16; header.alignment = .centerY
+        let titles = NSStackView(); titles.orientation = .vertical; titles.alignment = .leading; titles.spacing = 4
+        let heading = NSTextField(labelWithString: "共享空间"); heading.font = .systemFont(ofSize: 23, weight: .semibold)
+        online.font = .systemFont(ofSize: 12); online.textColor = .secondaryLabelColor
+        titles.addArrangedSubview(heading); titles.addArrangedSubview(online); header.addArrangedSubview(titles)
+        let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow, for: .horizontal); header.addArrangedSubview(spacer)
         addButton = button("添加文件…", #selector(addFiles), key: "o")
         saveButton = button("另存到…", #selector(saveFiles), key: "s")
-        deleteButton = button("删除", #selector(deleteFiles))
-        tools.addArrangedSubview(addButton); tools.addArrangedSubview(saveButton); tools.addArrangedSubview(deleteButton)
-        tools.addArrangedSubview(button("刷新", #selector(refresh), key: "r"))
-        tools.addArrangedSubview(button("帮助", #selector(help)))
-        tools.addArrangedSubview(button("打开本机存储位置", #selector(revealBucket)))
-        layout.addArrangedSubview(tools)
-        // Reserve enough content space for every control, the expanded guide,
-        // three status lines and a visible 160-point file list at minimum size.
-        // Native button metrics determine the horizontal limit for this locale.
-        window.contentMinSize = NSSize(width: max(760, tools.fittingSize.width + 48), height: 560)
+        header.addArrangedSubview(addButton); header.addArrangedSubview(saveButton)
+        let more = NSPopUpButton(frame: .zero, pullsDown: true)
+        more.bezelStyle = .rounded; more.addItem(withTitle: "更多")
+        for (title, action) in [("刷新", #selector(refresh)), ("打开本机存储位置", #selector(revealBucket)), ("网络诊断", #selector(diagnostics)), ("使用帮助", #selector(help))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: title == "刷新" ? "r" : ""); item.target = self; more.menu?.addItem(item)
+        }
+        header.addArrangedSubview(more)
+        layout.addArrangedSubview(header); header.widthAnchor.constraint(equalTo: layout.widthAnchor).isActive = true
+        guide.textColor = .secondaryLabelColor; guide.font = .systemFont(ofSize: 12)
+        layout.addArrangedSubview(guide); guide.widthAnchor.constraint(equalTo: layout.widthAnchor).isActive = true
+        window.contentMinSize = NSSize(width: 760, height: 520)
         let navigation = NSStackView(); navigation.spacing = 12
         breadcrumb.spacing = 2; breadcrumb.orientation = .horizontal
         let crumbScroll = NSScrollView(); crumbScroll.drawsBackground = false; crumbScroll.hasHorizontalScroller = true
@@ -152,7 +157,7 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         navigation.addArrangedSubview(search); layout.addArrangedSubview(navigation)
         navigation.widthAnchor.constraint(equalTo: layout.widthAnchor).isActive = true
         crumbScroll.heightAnchor.constraint(equalToConstant: 34).isActive = true
-        for (id, title, width) in [("name", "名称", 540.0), ("size", "大小", 110.0), ("date", "修改时间", 170.0)] {
+        for (id, title, width) in [("name", "名称", 380.0), ("size", "大小", 100.0), ("owner", "位置", 160.0), ("date", "修改时间", 170.0)] {
             let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id)); col.title = title; col.width = width; col.minWidth = id == "name" ? 220 : 90
             table.addTableColumn(col)
         }
@@ -162,7 +167,7 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         table.target = self; table.doubleAction = #selector(openSelection)
         table.exited = { [weak self] in self?.highlight(false) }
         table.activateSelection = { [weak self] in self?.openRow(self?.table.selectedRow ?? -1) }
-        table.setAccessibilityLabel("附近电脑和共享文件")
+        table.setAccessibilityLabel("共享空间文件")
         table.registerForDraggedTypes([.fileURL] + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) })
         table.setDraggingSourceOperationMask(.copy, forLocal: false)
         table.setDraggingSourceOperationMask(.copy, forLocal: true)
@@ -179,6 +184,7 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         state.font = .systemFont(ofSize: 12); state.setAccessibilityLabel("传输状态")
         state.lineBreakMode = .byWordWrapping; state.maximumNumberOfLines = 3
         footer.addArrangedSubview(state)
+        deleteButton = button("移到废纸篓…", #selector(deleteFiles)); footer.addArrangedSubview(deleteButton)
         retryButton = button("重试", #selector(retry)); retryButton.isHidden = true; footer.addArrangedSubview(retryButton)
         cancelButton = button("取消传输", #selector(cancelJobs)); cancelButton.isHidden = true; footer.addArrangedSubview(cancelButton)
         layout.addArrangedSubview(footer); footer.widthAnchor.constraint(equalTo: layout.widthAnchor).isActive = true
@@ -227,9 +233,9 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
                     self.startupError("共享服务启动失败，请查看应用资源和网络端口是否可用。"); return
                 }
                 self.service = ServiceInfo(base: base, token: token, bucket: URL(fileURLWithPath: bucket))
-                self.state.stringValue = "打开一台电脑，开始存放文件。"
-                self.refreshPeers(); self.pollJobs(); self.loadConfig()
-                self.peerTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshPeers(); self?.loadFiles() }
+                self.state.stringValue = "拖入文件存到本机，拖出复制到其他位置。"
+                self.loadFiles(); self.pollJobs(); self.loadConfig()
+                self.peerTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.loadFiles() }
                 self.jobTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.pollJobs() }
                 self.updateButtons()
             }
@@ -249,7 +255,7 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         guard let service = service else { return nil }
         var c = URLComponents(url: service.base.appendingPathComponent("app/" + route), resolvingAgainstBaseURL: false)!
         c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
-        var req = URLRequest(url: c.url!); req.timeoutInterval = 30
+        var req = URLRequest(url: c.url!); req.timeoutInterval = route == "peers" ? 5 : 30
         req.setValue("Bearer " + service.token, forHTTPHeaderField: "Authorization")
         if let body = body { req.httpMethod = "POST"; req.httpBody = try? JSONSerialization.data(withJSONObject: body); req.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return req
@@ -267,71 +273,101 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
             DispatchQueue.main.async { completion(result) }
         }.resume()
     }
-    private func refreshPeers() {
-        guard service != nil, !peerBusy else { return }; peerBusy = true
+    private func updatePeers(_ objects: [[String: Any]]) {
+        peers = objects.compactMap { p in
+            guard let id = p["id"] as? String, let name = p["name"] as? String else { return nil }
+            return Peer(id: id, name: name, local: p["local"] as? Bool ?? false, online: p["online"] as? Bool ?? true)
+        }
+        if let current = selectedPeer {
+            selectedPeer = peers.first { $0.id == current.id } ?? Peer(id: current.id, name: current.name, local: current.local, online: false)
+            updateNavigation()
+        }
+        updateAvailability()
+    }
+    private var ownerUnavailable: Bool {
+        selectedPeer != nil && (folderError != nil || peerStatusError || selectedPeer?.online == false)
+    }
+    private func updateAvailability() {
+        var detail = "\(peers.filter { $0.online }.count) 台电脑在线"
+        if let peer = selectedPeer, ownerUnavailable {
+            detail += " · 「\(peer.name)」暂时无法访问"
+            empty.stringValue = folderError ?? (peerStatusError ? "无法确认电脑状态，请刷新重试。" : "来源电脑已离线；文件仍保留在原电脑，返回共享空间可查看其他文件。")
+        } else if selectedPeer == nil, unavailableCount > 0 {
+            detail += " · \(unavailableCount) 台暂时无法访问"
+        }
+        online.stringValue = detail
+        updateButtons()
+    }
+    // Status discovery is independent of folder listing, with at most one
+    // bounded request in flight. Never aggregate every bucket just for a count.
+    private func refreshFolderPeers() {
+        guard selectedPeer != nil, service != nil, !quitting, !peerBusy else { return }
+        peerBusy = true; let generation = listGeneration
         api("peers") { [weak self] result in
             guard let self = self else { return }; self.peerBusy = false
+            guard self.listGeneration == generation, self.selectedPeer != nil else { return }
             switch result {
             case .success(let obj):
-                // Capture identities against the rows currently on screen before
-                // discovery replaces/reorders the underlying peer collection.
-                let selectedIDs = self.selectedRootPeerIDs
-                self.peers = (obj["peers"] as? [[String: Any]] ?? []).compactMap { p in
-                    guard let id = p["id"] as? String, let name = p["name"] as? String else { return nil }
-                    return Peer(id: id, name: name, local: p["local"] as? Bool ?? false, online: p["online"] as? Bool ?? true)
-                }.sorted { a, b in a.local != b.local ? a.local : a.name.localizedStandardCompare(b.name) == .orderedAscending }
-                if let current = self.selectedPeer, let updated = self.peers.first(where: { $0.id == current.id }) { self.selectedPeer = updated }
-                if self.selectedPeer == nil { self.reloadTable(rootSelection: selectedIDs) }
-            case .failure(let error): self.showError(error)
+                self.peerStatusError = false
+                self.updatePeers(obj["peers"] as? [[String: Any]] ?? [])
+                self.reloadTable()
+            case .failure(let error):
+                self.peerStatusError = true; self.updateAvailability(); self.showError(error)
             }
         }
     }
     private func loadFiles() {
-        guard let peer = selectedPeer, service != nil, !listBusy else { return }
-        listBusy = true; let generation = listGeneration; let path = directory
-        api("list", query: ["peer": peer.id, "path": path]) { [weak self] result in
+        refreshFolderPeers()
+        guard service != nil, !listBusy, !quitting else { return }
+        listBusy = true; let generation = listGeneration; let path = directory; let peer = selectedPeer
+        api(peer == nil ? "space" : "list", query: peer.map { ["peer": $0.id, "path": path] } ?? [:]) { [weak self] result in
             guard let self = self else { return }; self.listBusy = false
-            guard self.listGeneration == generation, self.selectedPeer?.id == peer.id, self.directory == path else { self.loadFiles(); return }
+            guard self.listGeneration == generation else { self.loadFiles(); return }
             switch result {
             case .success(let obj):
+                self.folderError = nil
+                if peer == nil {
+                    self.unavailableCount = (obj["unavailable"] as? [[String: Any]] ?? []).count
+                    self.updatePeers(obj["peers"] as? [[String: Any]] ?? [])
+                }
                 self.files = (obj["files"] as? [[String: Any]] ?? []).compactMap { f in
-                    guard let name = f["name"] as? String, let path = f["path"] as? String else { return nil }
-                    return Entry(name: name, path: path, directory: f["is_dir"] as? Bool ?? false, size: (f["size"] as? NSNumber)?.int64Value ?? 0, modified: (f["modified"] as? NSNumber)?.doubleValue ?? 0)
-                }.sorted { a, b in a.directory != b.directory ? a.directory : a.name.localizedStandardCompare(b.name) == .orderedAscending }
+                    guard let name = f["name"] as? String, let path = f["path"] as? String,
+                          let ownerID = peer?.id ?? (f["peer"] as? String) else { return nil }
+                    return Entry(name: name, path: path, directory: f["is_dir"] as? Bool ?? false,
+                                 size: (f["size"] as? NSNumber)?.int64Value ?? 0, modified: (f["modified"] as? NSNumber)?.doubleValue ?? 0,
+                                 peer: ownerID, owner: self.selectedPeer?.name ?? (f["owner"] as? String ?? "未知电脑"), local: peer?.local ?? (f["local"] as? Bool ?? false))
+                }.sorted { a, b in
+                    if a.directory != b.directory { return a.directory }
+                    let order = a.name.localizedStandardCompare(b.name)
+                    return order == .orderedSame ? a.identity < b.identity : order == .orderedAscending
+                }
                 self.reloadTable()
-            case .failure(let error): self.showError(error)
+            case .failure(let error):
+                if peer != nil { self.folderError = error.localizedDescription; self.updateAvailability() }
+                self.showError(error)
             }
         }
     }
-    private var visiblePeers: [Peer] { peers.filter { search.stringValue.isEmpty || $0.title.localizedCaseInsensitiveContains(search.stringValue) } }
-    private var selectedRootPeerIDs: Set<String> {
-        guard selectedPeer == nil else { return [] }
-        let displayedPeers = visiblePeers
-        return Set(table.selectedRowIndexes.compactMap { $0 < displayedPeers.count ? displayedPeers[$0].id : nil })
-    }
-    private func reloadTable(rootSelection: Set<String>? = nil) {
-        let selectedPaths = Set(selectedEntries.map { $0.path })
-        let selectedIDs = rootSelection ?? selectedRootPeerIDs
-        filtered = files.filter { search.stringValue.isEmpty || $0.name.localizedCaseInsensitiveContains(search.stringValue) }
+    private func reloadTable() {
+        let selectedIDs = Set(selectedEntries.map { $0.identity })
+        filtered = files.filter { search.stringValue.isEmpty || $0.name.localizedCaseInsensitiveContains(search.stringValue) || $0.owner.localizedCaseInsensitiveContains(search.stringValue) }
         table.reloadData()
-        let rows = selectedPeer == nil ? visiblePeers.enumerated().filter { selectedIDs.contains($0.element.id) }.map { $0.offset } : filtered.enumerated().filter { selectedPaths.contains($0.element.path) }.map { $0.offset }
-        table.selectRowIndexes(IndexSet(rows), byExtendingSelection: false)
-        if selectedPeer == nil { empty.stringValue = peers.contains(where: { !$0.local && $0.online }) ? "双击电脑名称，查看它的文件。" : "正在寻找附近的电脑 · 请在另一台电脑运行 LocalBucket，并连接同一局域网。" }
-        else { empty.stringValue = filtered.isEmpty ? (search.stringValue.isEmpty ? "把文件或文件夹拖到这里，或点击“添加文件…”" : "没有匹配的文件") : "选中文件拖到桌面或文件夹即可复制，原文件保留。" }
-        updateButtons()
+        table.selectRowIndexes(IndexSet(filtered.enumerated().filter { selectedIDs.contains($0.element.identity) }.map { $0.offset }), byExtendingSelection: false)
+        empty.stringValue = filtered.isEmpty ? (search.stringValue.isEmpty ? "把文件拖到这里，开始共享" : "没有匹配的文件") : "\(filtered.count) 个项目 · " + (selectedPeer.map { "添加到「\($0.name)」当前文件夹" } ?? "添加的文件存到本机")
+        updateAvailability()
     }
-    private var selectedEntries: [Entry] { guard selectedPeer != nil else { return [] }; return table.selectedRowIndexes.compactMap { $0 < filtered.count ? filtered[$0] : nil } }
+    private var selectedEntries: [Entry] { table.selectedRowIndexes.compactMap { $0 < filtered.count ? filtered[$0] : nil } }
     private func updateButtons() {
-        let ready = service != nil && !quitting
-        addButton?.isEnabled = ready && selectedPeer != nil
+        let ready = service != nil && !quitting && !ownerUnavailable
+        addButton?.isEnabled = ready
         saveButton?.isEnabled = ready && !selectedEntries.isEmpty
-        deleteButton?.isHidden = selectedPeer?.local != true
-        deleteButton?.isEnabled = ready && !selectedEntries.isEmpty
+        deleteButton?.isHidden = selectedEntries.isEmpty
+        deleteButton?.isEnabled = ready && !selectedEntries.isEmpty && selectedEntries.allSatisfy { $0.local }
         cancelButton?.isHidden = activeJobs.isEmpty
     }
     private func updateNavigation() {
         for view in breadcrumb.arrangedSubviews { breadcrumb.removeArrangedSubview(view); view.removeFromSuperview() }
-        let root = button("所有电脑", #selector(goRoot)); breadcrumb.addArrangedSubview(root)
+        let root = button("共享空间", #selector(goRoot)); breadcrumb.addArrangedSubview(root)
         if let peer = selectedPeer {
             breadcrumb.addArrangedSubview(NSTextField(labelWithString: "›"))
             let b = button(peer.local ? "我的电脑" : peer.name, #selector(goCrumb(_:))); b.identifier = NSUserInterfaceItemIdentifier(""); breadcrumb.addArrangedSubview(b)
@@ -344,7 +380,7 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         }
     }
     private func navigate(_ peer: Peer?, path: String = "") {
-        listGeneration += 1; selectedPeer = peer; directory = path; files = []; filtered = []; search.stringValue = ""
+        listGeneration += 1; folderError = nil; peerStatusError = false; selectedPeer = peer; directory = path; files = []; filtered = []; search.stringValue = ""
         table.deselectAll(nil); updateNavigation(); reloadTable(); loadFiles()
     }
     @objc private func goRoot() { navigate(nil) }
@@ -353,12 +389,14 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         openRow(table.clickedRow)
     }
     private func openRow(_ row: Int) {
-        guard row >= 0 else { return }
-        if selectedPeer == nil { guard row < visiblePeers.count else { return }; navigate(visiblePeers[row]) }
-        else if row < filtered.count, filtered[row].directory { navigate(selectedPeer, path: filtered[row].path) }
+        guard row >= 0, !ownerUnavailable else { return }
+        guard row < filtered.count, filtered[row].directory else { return }
+        let entry = filtered[row]
+        let owner = peers.first { $0.id == entry.peer } ?? Peer(id: entry.peer, name: entry.owner, local: entry.local, online: true)
+        navigate(owner, path: entry.path)
     }
     func controlTextDidChange(_ obj: Notification) { reloadTable() }
-    func numberOfRows(in tableView: NSTableView) -> Int { selectedPeer == nil ? visiblePeers.count : filtered.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
     func tableViewSelectionDidChange(_ notification: Notification) { updateButtons() }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = tableColumn?.identifier.rawValue ?? "name"
@@ -368,47 +406,42 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         var leading: CGFloat = 8
         if id == "name" {
             let icon = NSImageView(); icon.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(icon)
-            if selectedPeer == nil { icon.image = NSImage(systemSymbolName: "desktopcomputer", accessibilityDescription: "电脑") }
-            else if row < filtered.count { let e = filtered[row]; icon.image = NSWorkspace.shared.icon(for: e.directory ? .folder : (UTType(filenameExtension: (e.name as NSString).pathExtension) ?? .data)) }
+            if row < filtered.count { let e = filtered[row]; icon.image = NSWorkspace.shared.icon(for: e.directory ? .folder : (UTType(filenameExtension: (e.name as NSString).pathExtension) ?? .data)) }
             NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 24), icon.heightAnchor.constraint(equalToConstant: 24)])
             leading = 44
         }
         NSLayoutConstraint.activate([text.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: leading), text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8), text.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
-        if selectedPeer == nil {
-            guard row < visiblePeers.count else { return cell }; let p = visiblePeers[row]
-            text.stringValue = id == "name" ? p.title : (id == "size" ? (p.online ? "在线" : "离线") : (p.local ? "本机" : "附近电脑"))
-        } else {
-            guard row < filtered.count else { return cell }; let f = filtered[row]
-            if id == "name" { text.stringValue = f.name; cell.toolTip = f.name }
-            else if id == "size" { text.stringValue = f.directory ? "文件夹" : ByteCountFormatter.string(fromByteCount: f.size, countStyle: .file) }
-            else { text.stringValue = DateFormatter.localizedString(from: Date(timeIntervalSince1970: f.modified), dateStyle: .short, timeStyle: .short) }
-        }
+        guard row < filtered.count else { return cell }; let f = filtered[row]
+        if id == "name" { text.stringValue = f.name; cell.toolTip = f.name }
+        else if id == "size" { text.stringValue = f.directory ? "文件夹" : ByteCountFormatter.string(fromByteCount: f.size, countStyle: .file) }
+        else if id == "owner" { text.stringValue = f.local ? "本机 · " + f.owner : f.owner }
+        else { text.stringValue = DateFormatter.localizedString(from: Date(timeIntervalSince1970: f.modified), dateStyle: .short, timeStyle: .short) }
         if id != "name" { text.textColor = .secondaryLabelColor }
         return cell
     }
 
-    @objc private func refresh() { refreshPeers(); loadFiles() }
+    @objc private func refresh() { loadFiles() }
     @objc private func addFiles() {
-        guard selectedPeer != nil else { return }
+        guard !ownerUnavailable else { return }
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.allowsMultipleSelection = true
-        panel.message = "选择要复制到这台电脑的文件或文件夹"; panel.prompt = "添加"
+        panel.message = selectedPeer.map { "添加到「\($0.name)」当前文件夹" } ?? "添加到本机共享空间"; panel.prompt = "添加"
         panel.beginSheetModal(for: window) { [weak self] response in if response == .OK { self?.importFiles(panel.urls) } }
     }
     private func importFiles(_ urls: [URL]) {
-        guard let peer = selectedPeer, !urls.isEmpty else { return }
-        submit("import", body: ["peer": peer.id, "path": directory, "sources": urls.map { $0.path }])
+        guard !urls.isEmpty, !ownerUnavailable else { return }
+        submit("import", body: ["peer": selectedPeer?.id ?? "", "path": directory, "sources": urls.map { $0.path }])
     }
     @objc private func saveFiles() {
-        guard let peer = selectedPeer, !selectedEntries.isEmpty else { return }; let paths = selectedEntries.map { $0.path }
+        guard !selectedEntries.isEmpty, !ownerUnavailable else { return }; let items = selectedEntries.map { ["peer": $0.peer, "path": $0.path] }
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
         panel.prompt = "另存到这里"; panel.message = "复制所选文件，原文件保留。"
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let destination = panel.url else { return }
-            self?.submit("save", body: ["peer": peer.id, "paths": paths, "destination": destination.path])
+            self?.submit("save", body: ["items": items, "destination": destination.path])
         }
     }
     @objc private func deleteFiles() {
-        guard selectedPeer?.local == true, !selectedEntries.isEmpty else { return }; let paths = selectedEntries.map { $0.path }
+        guard !selectedEntries.isEmpty, !ownerUnavailable, selectedEntries.allSatisfy({ $0.local }) else { return }; let paths = selectedEntries.map { $0.path }
         let alert = NSAlert(); alert.messageText = "将 \(paths.count) 个项目移到废纸篓？"; alert.informativeText = "可在 Finder 的废纸篓中恢复。"; alert.addButton(withTitle: "移到废纸篓"); alert.addButton(withTitle: "取消")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
@@ -447,11 +480,7 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
                     let message = job["message"] as? String ?? "任务已完成。"
                     if status == "error" { self.state.stringValue = job["error"] as? String ?? message; self.retryAction = self.jobRetries[id]; self.retryButton.isHidden = self.retryAction == nil }
                     else {
-                        var detail = message
-                        if let counts = job["result"] as? [String: Any] {
-                            detail += "  添加 \(counts["added"] as? Int ?? 0)，跳过 \(counts["skipped"] as? Int ?? 0)，保留新副本 \(counts["renamed"] as? Int ?? 0)。"
-                        }
-                        self.state.stringValue = detail
+                        self.state.stringValue = message
                     }
                     self.loadFiles()
                 }
@@ -483,7 +512,7 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     }
     @objc private func help() {
         let a = NSAlert(); a.messageText = "在附近电脑间存放文件"
-        a.informativeText = "1. 在每台电脑运行 LocalBucket，并连接同一局域网。\n2. 双击电脑名称，进入它的独立 bucket。\n3. 拖入文件或文件夹即可添加；拖出或“另存到…”会复制并保留原文件。\n\n只有本机文件可移到废纸篓。关闭窗口将停止共享并退出。\n\n找不到电脑？确认对方软件正在运行，并允许系统的本地网络访问。部分访客 Wi-Fi 会隔离设备。"
+        a.informativeText = "1. 在每台电脑运行 LocalBucket，并连接同一局域网。\n2. 共享空间直接显示在线电脑的文件；“位置”标明来源。双击文件夹进入。\n3. 在共享空间拖入文件存到本机，进入文件夹后拖入则存到该电脑；拖出或“另存到…”会复制并保留原文件。\n\n只有本机文件可移到废纸篓。关闭窗口将停止共享并退出。\n\n找不到电脑？确认对方软件正在运行，并允许系统的本地网络访问。部分访客 Wi-Fi 会隔离设备。"
         a.addButton(withTitle: "知道了"); a.addButton(withTitle: "网络诊断"); a.addButton(withTitle: "显示／关闭入门指引")
         a.beginSheetModal(for: window) { [weak self] response in
             guard let self = self else { return }
@@ -491,7 +520,7 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
             if response == .alertThirdButtonReturn { self.guide.isHidden.toggle(); self.api("config", body: ["guide_seen": self.guide.isHidden]) { _ in } }
         }
     }
-    private func diagnostics() {
+    @objc private func diagnostics() {
         api("diagnostics") { [weak self] result in
             guard let self = self else { return }; let a = NSAlert(); a.messageText = "网络诊断"
             switch result {
@@ -501,14 +530,32 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
             a.beginSheetModal(for: self.window)
         }
     }
-    @objc private func about() { NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "LocalBucket", .applicationVersion: "0.1", .credits: NSAttributedString(string: "附近电脑间的文件存放工具")]) }
+    @objc private func about() { NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "LocalBucket", .applicationVersion: "0.2", .credits: NSAttributedString(string: "附近电脑间的文件存放工具")]) }
+
+    // Finder receives URLs for local items and promises for remote items. Reserve
+    // local basenames first so a mixed drag never gives two items the same name.
+    private func promisedNames() -> [String: String] {
+        var used = Set(filtered.filter { $0.local }.map { $0.name.lowercased() })
+        var names: [String: String] = [:]
+        for entry in filtered where !entry.local {
+            let original = entry.name + (entry.directory ? ".zip" : "")
+            let ext = (original as NSString).pathExtension
+            let stem = (original as NSString).deletingPathExtension
+            var name = original; var suffix = 2
+            while used.contains(name.lowercased()) {
+                name = stem + " (\(suffix))" + (ext.isEmpty ? "" : "." + ext); suffix += 1
+            }
+            used.insert(name.lowercased()); names[entry.identity] = name
+        }
+        return names
+    }
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        guard let peer = selectedPeer, row < filtered.count, let service = service else { return nil }
+        guard row < filtered.count, !ownerUnavailable, let service = service else { return nil }
         let entry = filtered[row]
-        if peer.local { return service.bucket.appendingPathComponent(entry.path) as NSURL }
-        guard let req = request("download", query: ["peer": peer.id, "path": entry.path]) else { return nil }
-        let name = entry.name + (entry.directory ? ".zip" : "")
+        if entry.local { return service.bucket.appendingPathComponent(entry.path) as NSURL }
+        guard let req = request("download", query: ["peer": entry.peer, "path": entry.path]) else { return nil }
+        let name = promisedNames()[entry.identity] ?? entry.name
         let promise = DownloadPromise(name: name, request: req, activity: { [weak self] id, task in
             DispatchQueue.main.async {
                 guard let self = self else { task?.cancel(); return }
@@ -520,7 +567,7 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         return NSFilePromiseProvider(fileType: entry.directory ? UTType.zip.identifier : (UTType(filenameExtension: (entry.name as NSString).pathExtension) ?? .data).identifier, delegate: promise)
     }
     func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
-        if let peer = selectedPeer { dragOrigin = (peer.id, directory) }
+        dragOrigin = (selectedPeer?.id, directory)
     }
     func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         highlight(false); dragOrigin = nil
@@ -530,16 +577,16 @@ private final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     private func highlight(_ enabled: Bool) { scroll.layer?.borderWidth = enabled ? 3 : 0; scroll.layer?.borderColor = NSColor.controlAccentColor.cgColor }
     func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int, proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
         tableView.setDropRow(-1, dropOperation: .on)
-        guard let peer = selectedPeer else { state.stringValue = "请先双击打开目标电脑，再添加文件。"; highlight(false); return [] }
-        if let source = info.draggingSource as? NSTableView, source === table, let origin = dragOrigin, origin.0 == peer.id, origin.1 == directory { state.stringValue = "文件已在这里，无需重复添加。"; highlight(false); return [] }
+        guard !ownerUnavailable else { highlight(false); return [] }
+        if let source = info.draggingSource as? NSTableView, source === table, let origin = dragOrigin, (selectedPeer == nil || (origin.0 == selectedPeer?.id && origin.1 == directory)) { state.stringValue = "文件已在这里，无需重复添加。"; highlight(false); return [] }
         guard info.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else { highlight(false); return [] }
-        state.stringValue = "添加到「\(peer.local ? "我的电脑" : peer.name)\(directory.isEmpty ? "" : "/" + directory)」"
+        state.stringValue = selectedPeer.map { "添加到「\($0.name)/\(directory)」" } ?? "添加到本机共享空间"
         highlight(true); return .copy
     }
     func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
         highlight(false)
-        guard selectedPeer != nil else { return false }
-        if let source = info.draggingSource as? NSTableView, source === table, let origin = dragOrigin, origin.0 == selectedPeer?.id, origin.1 == directory { state.stringValue = "文件已在这里，无需重复添加。"; return false }
+        guard !ownerUnavailable else { return false }
+        if let source = info.draggingSource as? NSTableView, source === table, let origin = dragOrigin, (selectedPeer == nil || (origin.0 == selectedPeer?.id && origin.1 == directory)) { state.stringValue = "文件已在这里，无需重复添加。"; return false }
         guard let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty else { return false }
         importFiles(urls); return true
     }

@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 type Options struct {
 	DataDir, DufsPath, Name string
@@ -236,7 +236,7 @@ func (s *Service) peer(id string) (Peer, error) {
 	defer s.mu.Unlock()
 	p, ok := s.peers[id]
 	if !ok || time.Since(p.seen) > 12*time.Second {
-		return Peer{}, errors.New("这台电脑已离线，请返回所有电脑刷新")
+		return Peer{}, errors.New("文件所在电脑已离线，请返回共享空间刷新")
 	}
 	return p, nil
 }

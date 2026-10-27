@@ -16,7 +16,6 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -78,11 +77,6 @@ type peer struct {
 	ID, Name, Address string
 	Local, Online     bool
 }
-type file struct {
-	Name, Path     string
-	IsDir          bool `json:"is_dir"`
-	Size, Modified int64
-}
 type job struct {
 	ID, Kind, Status, Message, Error string
 	Completed, Total                 int64
@@ -91,7 +85,9 @@ type job struct {
 }
 
 var service *node.Service
-var window, list, breadcrumb, status, jobsBox, filter, emptyLabel, font uintptr
+var window, list, breadcrumb, status, jobsBox, filter, emptyLabel, font, heading, destination, columns uintptr
+var unavailableCount int
+var columnLabels [4]uintptr
 var controls = map[int]uintptr{}
 var peers []peer
 var files []file
@@ -219,16 +215,6 @@ func action(endpoint string, data any) {
 	}()
 }
 
-// Metadata is sorted so enumeration order alone never expires a ready export.
-func metadataFingerprint(peerID, rel string, entries []file) string {
-	copyEntries := append([]file(nil), entries...)
-	sort.Slice(copyEntries, func(i, j int) bool { return copyEntries[i].Path < copyEntries[j].Path })
-	b, _ := json.Marshal(struct {
-		Peer, Path string
-		Files      []file
-	}{peerID, rel, copyEntries})
-	return fmt.Sprintf("%x", sha256.Sum256(b))
-}
 func invalidatePrepared() {
 	prepared = nil
 	preparedKey = ""
@@ -264,7 +250,7 @@ func setUIFont(dpi uint32) {
 	for _, h := range controls {
 		call(user, "SendMessageW", h, 0x30, font, 1)
 	}
-	for _, h := range []uintptr{breadcrumb, status, jobsBox, emptyLabel} {
+	for _, h := range []uintptr{breadcrumb, status, jobsBox, emptyLabel, heading, destination, columns, columnLabels[0], columnLabels[1], columnLabels[2], columnLabels[3]} {
 		if h != 0 {
 			call(user, "SendMessageW", h, 0x30, font, 1)
 		}
@@ -291,26 +277,31 @@ func layout() {
 		dpi = 96
 	}
 	s := func(v int) int { return v * int(dpi) / 96 }
-	m := s(16)
-	move(breadcrumb, m, m, w-2*m, s(28))
-	for row, ids := range [][]int{{101, 102, 103, 104, 110}, {105, 106, 107, 108, 111, 112}} {
-		x := m
-		for _, id := range ids {
-			bw := s(106)
-			if id == 107 {
-				bw = s(174)
-			}
-			move(controls[id], x, s(50+row*36), bw, s(30))
-			x += bw + s(6)
-		}
+	m := s(24)
+	move(heading, m, s(20), w-2*m-s(330), s(30))
+	move(controls[103], w-m-s(304), s(18), s(110), s(34))
+	move(controls[105], w-m-s(184), s(18), s(110), s(34))
+	move(controls[113], w-m-s(64), s(18), s(64), s(34))
+	move(controls[101], m, s(72), s(50), s(30))
+	move(controls[102], m+s(56), s(72), s(82), s(30))
+	move(breadcrumb, m+s(150), s(77), w-2*m-s(430), s(26))
+	move(filter, w-m-s(260), s(72), s(260), s(30))
+	move(destination, m, s(114), w-2*m, s(24))
+	cw := w - 2*m - s(30)
+	starts := []int{0, cw * 39 / 100, cw * 51 / 100, cw * 76 / 100, cw}
+	for i, label := range columnLabels {
+		move(label, m+s(12)+starts[i], s(151), starts[i+1]-starts[i], s(24))
 	}
-	move(filter, m, s(128), w-2*m, s(28))
-	move(list, m, s(166), w-2*m, h-s(330))
-	move(emptyLabel, m+s(12), s(204), w-2*m-s(24), s(60))
-	move(status, m, h-s(150), w-2*m, s(42))
-	move(jobsBox, m, h-s(104), w-2*m, s(88))
+	move(list, m, s(179), w-2*m, h-s(292))
+	move(emptyLabel, m+s(24), s(228), w-2*m-s(48), s(64))
+	move(status, m, h-s(99), w-2*m-s(190), s(28))
+	move(controls[111], w-m-s(180), h-s(100), s(85), s(27))
+	move(controls[112], w-m-s(85), h-s(100), s(85), s(27))
+	move(jobsBox, m, h-s(64), w-2*m, s(42))
+	call(user, "SendMessageW", list, 0x1a0, 0, uintptr(s(38)))
 }
 func render() {
+	top := call(user, "SendMessageW", list, 0x18e, 0, 0)
 	selected := map[string]bool{}
 	for i, key := range renderedKeys {
 		if call(user, "SendMessageW", list, 0x187, uintptr(i), 0) == 1 {
@@ -318,79 +309,83 @@ func render() {
 		}
 	}
 	renderedKeys = nil
+	shown = nil
 	call(user, "SendMessageW", list, 0xB, 0, 0)
 	call(user, "SendMessageW", list, 0x184, 0, 0)
-	shown = nil
 	var b [1024]uint16
 	call(user, "GetWindowTextW", filter, uintptr(unsafe.Pointer(&b[0])), 1024)
 	q := strings.ToLower(syscall.UTF16ToString(b[:]))
-	if selectedPeer == nil {
-		for i, p := range peers {
-			label := p.Name
-			if p.Local {
-				label = "我的电脑 · " + p.Name + "（本机）"
-			}
-			if !p.Online {
-				label += "（离线）"
-			}
-			if q == "" || strings.Contains(strings.ToLower(label), q) {
-				call(user, "SendMessageW", list, 0x180, 0, ptr("电脑    "+label))
-				shown = append(shown, i)
-				renderedKeys = append(renderedKeys, p.ID)
-			}
+	for i, f := range files {
+		if q != "" && !strings.Contains(strings.ToLower(f.Name+" "+f.Owner), q) {
+			continue
 		}
-		text(breadcrumb, "所有电脑")
-		if len(peers) <= 1 {
-			text(breadcrumb, "所有电脑 · 正在寻找附近的电脑，请在对方电脑上打开 LocalBucket")
+		name, size := f.Name, formatSize(f.Size)
+		if f.IsDir {
+			name = "▸ " + name
+			size = "文件夹"
 		}
-		text(emptyLabel, "正在寻找附近的电脑…\r\n请在同一局域网的其他电脑上打开 LocalBucket。")
-	} else {
-		for i, f := range files {
-			if q != "" && !strings.Contains(strings.ToLower(f.Name), q) {
-				continue
-			}
-			kind := "文件"
-			size := formatSize(f.Size)
-			if f.IsDir {
-				kind = "文件夹"
-				size = "—"
-			}
-			label := fmt.Sprintf("%s    %s\t%s\t%s", kind, f.Name, size, time.Unix(f.Modified, 0).Local().Format("2006/01/02 15:04"))
-			call(user, "SendMessageW", list, 0x180, 0, ptr(label))
-			shown = append(shown, i)
-			renderedKeys = append(renderedKeys, selectedPeer.ID+"/"+f.Path)
+		owner := f.Owner
+		if f.Local {
+			owner += " · 本机"
 		}
-		crumb := "所有电脑  >  " + selectedPeer.Name
-		if currentPath != "" {
-			crumb += "  >  " + strings.ReplaceAll(currentPath, "/", "  >  ")
-		}
-		text(breadcrumb, crumb)
-		text(emptyLabel, "把文件或文件夹拖到这里\r\n也可以点击“添加文件…”或“添加文件夹…”")
+		label := fmt.Sprintf("%s\t%s\t%s\t%s", name, size, owner, time.Unix(f.Modified, 0).Local().Format("2006/01/02 15:04"))
+		call(user, "SendMessageW", list, 0x180, 0, ptr(label))
+		shown = append(shown, i)
+		renderedKeys = append(renderedKeys, fileKey(f))
 	}
+	online := 0
+	for _, p := range peers {
+		if p.Online {
+			online++
+		}
+	}
+	title := fmt.Sprintf("共享空间  ·  %d 台在线", online)
+	if unavailableCount > 0 {
+		title += fmt.Sprintf(" · %d 台暂不可用", unavailableCount)
+	}
+	text(heading, title)
+	crumb := "所有文件"
+	dest := "添加到本机存储桶 · 文件保留在来源电脑，在线时可用"
+	if selectedPeer != nil {
+		crumb = selectedPeer.Name + "  >  " + strings.ReplaceAll(currentPath, "/", "  >  ")
+		dest = "添加到「" + selectedPeer.Name + " / " + currentPath + "」"
+	}
+	text(breadcrumb, crumb)
+	text(destination, dest)
+	text(emptyLabel, "把文件或文件夹拖到这里\r\n点击“添加…”开始共享；附近电脑上的文件会自动出现。")
 	for i, key := range renderedKeys {
 		if selected[key] {
 			call(user, "SendMessageW", list, 0x185, 1, uintptr(i))
 		}
+	}
+	if top < uintptr(len(shown)) {
+		call(user, "SendMessageW", list, 0x197, top, 0)
 	}
 	visible := uintptr(0)
 	if len(shown) == 0 {
 		visible = 5
 	}
 	call(user, "ShowWindow", emptyLabel, visible)
-	active := uintptr(0)
-	local := uintptr(0)
-	if selectedPeer != nil {
-		active = 1
-		if selectedPeer.Local {
-			local = 1
-		}
-	}
-	for _, id := range []int{103, 104, 105} {
-		call(user, "EnableWindow", controls[id], active)
-	}
-	call(user, "ShowWindow", controls[106], map[bool]uintptr{true: 5, false: 0}[local == 1])
+	updateSelectionActions()
+	call(user, "EnableWindow", controls[101], map[bool]uintptr{true: 1, false: 0}[selectedPeer != nil])
 	call(user, "SendMessageW", list, 0xB, 1, 0)
 	call(user, "InvalidateRect", list, 0, 1)
+}
+func updateSelectionActions() {
+	enabled := uintptr(0)
+	if len(chosen()) > 0 {
+		enabled = 1
+	}
+	call(user, "EnableWindow", controls[105], enabled)
+}
+func destinationPeer() string {
+	if selectedPeer != nil {
+		return selectedPeer.ID
+	}
+	return ""
+}
+func sameDragDestination() bool {
+	return dragActive && (selectedPeer == nil || (dragPeer == destinationPeer() && dragPath == currentPath))
 }
 func formatSize(n int64) string {
 	if n < 1024 {
@@ -410,17 +405,32 @@ func refresh() {
 	}
 	loading = true
 	g := generation
-	id, rel := "", ""
+	id, rel := destinationPeer(), currentPath
+	var owner peer
 	if selectedPeer != nil {
-		id = selectedPeer.ID
-		rel = currentPath
+		owner = *selectedPeer
 	}
 	go func() {
 		var ps struct{ Peers []peer }
-		var fs struct{ Files []file }
-		e := api("GET", "/app/peers", nil, &ps)
-		if e == nil && id != "" {
-			e = api("GET", "/app/list?peer="+url.QueryEscape(id)+"&path="+url.QueryEscape(rel), nil, &fs)
+		var fs struct {
+			Files       []file
+			Peers       []peer
+			Unavailable []struct{ Peer, Owner, Error string }
+		}
+		var e error
+		if id == "" {
+			e = api("GET", "/app/space", nil, &fs)
+			ps.Peers = fs.Peers
+		} else {
+			e = api("GET", "/app/peers", nil, &ps)
+			if e == nil {
+				e = api("GET", "/app/list?peer="+url.QueryEscape(id)+"&path="+url.QueryEscape(rel), nil, &fs)
+			}
+			for i := range fs.Files {
+				fs.Files[i].Peer = id
+				fs.Files[i].Owner = owner.Name
+				fs.Files[i].Local = owner.Local
+			}
 		}
 		post(func() {
 			loading = false
@@ -428,6 +438,7 @@ func refresh() {
 				return
 			}
 			if g != generation {
+				refresh()
 				return
 			}
 			if e != nil {
@@ -435,13 +446,12 @@ func refresh() {
 				return
 			}
 			peers = ps.Peers
-			if id != "" {
-				files = fs.Files
-				listingSnapshot = metadataFingerprint(id, rel, files)
-				if len(prepared) > 0 && preparedSnapshot != listingSnapshot {
-					invalidatePrepared()
-					report("文件列表已变化，请重新拖动以准备最新文件")
-				}
+			files = fs.Files
+			unavailableCount = len(fs.Unavailable)
+			listingSnapshot = metadataFingerprint(id, rel, files)
+			if len(prepared) > 0 && preparedSnapshot != listingSnapshot {
+				invalidatePrepared()
+				report("文件列表已变化，请重新拖动以准备最新文件")
 			}
 			render()
 		})
@@ -510,8 +520,8 @@ func poll() {
 					}
 				}
 			}
-			if len(lines) > 4 {
-				lines = lines[len(lines)-4:]
+			if len(lines) > 2 {
+				lines = lines[len(lines)-2:]
 			}
 			text(jobsBox, strings.Join(lines, "\r\n"))
 			if refreshNeeded {
@@ -529,7 +539,7 @@ func chosen() []file {
 	call(user, "SendMessageW", list, 0x191, uintptr(n), uintptr(unsafe.Pointer(&idx[0])))
 	var out []file
 	for _, i := range idx {
-		if int(i) < len(shown) && selectedPeer != nil {
+		if i >= 0 && int(i) < len(shown) {
 			out = append(out, files[shown[i]])
 		}
 	}
@@ -543,77 +553,60 @@ func selectedPaths() []string {
 	return p
 }
 func importSources(sources []string) {
-	if selectedPeer == nil {
-		report("请先打开要存放文件的电脑")
-		return
-	}
-	if dragActive && dragPeer == selectedPeer.ID && dragPath == currentPath {
-		report("文件已在这里，无需重复添加")
+	if sameDragDestination() {
+		report("文件已在共享空间，无需重复添加")
 		return
 	}
 	if len(sources) > 0 {
-		action("/app/import", map[string]any{"peer": selectedPeer.ID, "path": currentPath, "sources": sources})
+		action("/app/import", map[string]any{"peer": destinationPeer(), "path": currentPath, "sources": sources})
 	}
 }
 func openSelected() {
-	if selectedPeer == nil {
-		idx := int(int32(call(user, "SendMessageW", list, 0x19f, 0, 0)))
-		if idx < 0 || idx >= len(shown) {
-			return
-		}
-		p := peers[shown[idx]]
-		if !p.Online {
-			report("这台电脑当前不在线")
-			return
-		}
-		selectedPeer = &p
-		currentPath = ""
-	} else {
-		f := chosen()
-		if len(f) != 1 || !f[0].IsDir {
-			return
-		}
-		currentPath = f[0].Path
+	f := chosen()
+	if len(f) != 1 || !f[0].IsDir {
+		return
 	}
+	selectedPeer = &peer{ID: f[0].Peer, Name: f[0].Owner, Local: f[0].Local, Online: true}
+	currentPath = f[0].Path
+	navigate()
+}
+func navigate() {
 	generation++
 	files = nil
+	invalidatePrepared()
+	renderedKeys = nil
+	text(filter, "")
 	render()
 	refresh()
 }
 func up() {
-	generation++
-	if selectedPeer != nil && currentPath != "" {
-		currentPath = path.Dir(currentPath)
-		if currentPath == "." {
-			currentPath = ""
-		}
-	} else {
+	if selectedPeer == nil {
+		return
+	}
+	currentPath = path.Dir(currentPath)
+	if currentPath == "." || currentPath == "" {
 		selectedPeer = nil
 		currentPath = ""
 	}
-	files = nil
-	render()
-	refresh()
+	navigate()
 }
 func dragSelection() {
-	if closing || selectedPeer == nil {
+	if closing {
 		return
 	}
 	selection := chosen()
 	if len(selection) == 0 {
 		return
 	}
-	var ps []string
 	directory := false
 	for _, f := range selection {
-		ps = append(ps, f.Path)
 		directory = directory || f.IsDir
 	}
-	key := metadataFingerprint(selectedPeer.ID, currentPath, selection)
-	if selectedPeer.Local {
+	key := metadataFingerprint(destinationPeer(), currentPath, selection)
+	if allLocal(selection) {
 		var originals []string
-		for _, p := range ps {
-			originals = append(originals, filepath.Join(service.BucketDir, filepath.FromSlash(p)))
+		for _, f := range selection {
+			originals = append(originals, filepath.Join(service.BucketDir, filepath.FromSlash(f.Path)))
 		}
 		runDrag(originals)
 		return
@@ -625,17 +618,17 @@ func dragSelection() {
 		return
 	}
 	if preparing != "" {
-		report("正在准备远端文件，请稍候；完成后请再次拖动")
+		report("正在准备文件，请稍候；完成后请再次拖动")
 		return
 	}
 	invalidatePrepared()
 	preparedKey = key
 	preparedDirectory = directory
-	report("正在准备远端文件…完成后请再次拖动，也可使用“另存到…”")
-	action("/app/prepare", map[string]any{"peer": selectedPeer.ID, "paths": ps})
+	report("正在准备所选文件…完成后请再次拖动，也可使用“另存到…”")
+	action("/app/prepare", map[string]any{"items": selectionItems(selection)})
 }
 func showHelp() {
-	message("使用 LocalBucket", "每台电脑都有自己的专用存储桶。首页双击电脑名称查看文件。\r\n\r\n拖入或添加文件：复制到当前电脑的存储桶。\r\n拖出或另存到：复制文件，原文件保留。\r\n远端文件首次拖出需先准备，完成后请再次拖动。\r\n只有本机文件可删除，删除后进入回收站。\r\n\r\n关闭窗口会停止共享并退出。附近电脑需运行软件并连接同一局域网。", 0)
+	message("使用 LocalBucket", "共享空间显示所有在线电脑的文件，位置栏标明文件来源。双击文件夹打开。\r\n\r\n首页拖入或添加：复制到本机存储桶；文件夹内添加：复制到所属电脑。\r\n拖出或另存到：复制文件，原文件保留。\r\n远端文件首次拖出需先准备，完成后请再次拖动。\r\n只有本机文件可删除，删除后进入回收站。\r\n\r\n关闭窗口会停止共享并退出。附近电脑需运行软件并连接同一局域网。", 0)
 	go func() {
 		var d struct {
 			Message   string
@@ -669,7 +662,7 @@ func onboarding() {
 				return
 			}
 			if !c.GuideSeen {
-				message("欢迎使用 LocalBucket", "在首页双击一台电脑，即可查看它的存储桶。\r\n拖入文件进行存放，拖出文件复制到桌面。\r\n附近电脑会自动出现，无需输入地址。\r\n关闭窗口即停止共享并退出。", 0)
+				message("欢迎使用 LocalBucket", "共享空间直接显示所有在线电脑的文件。位置栏标明来源。\r\n拖入文件进行存放，拖出文件复制到桌面。\r\n附近电脑会自动出现，无需输入地址。\r\n关闭窗口即停止共享并退出。", 0)
 				go func() {
 					if e := api("POST", "/app/config", map[string]bool{"guide_seen": true}, nil); e != nil {
 						post(func() { report(e.Error()) })
@@ -724,8 +717,103 @@ func closeApp() {
 		})
 	}()
 }
+func showMenu(entries []struct {
+	id       int
+	label    string
+	disabled bool
+}, anchor uintptr) {
+	menu := call(user, "CreatePopupMenu")
+	defer call(user, "DestroyMenu", menu)
+	for _, e := range entries {
+		flags := uintptr(0)
+		if e.disabled {
+			flags = 3
+		}
+		call(user, "AppendMenuW", menu, flags, uintptr(e.id), ptr(e.label))
+	}
+	var r rect
+	call(user, "GetWindowRect", anchor, uintptr(unsafe.Pointer(&r)))
+	cmd := call(user, "TrackPopupMenu", menu, 0x100, uintptr(r.L), uintptr(r.B), 0, window, 0)
+	if cmd != 0 {
+		call(user, "PostMessageW", window, 0x111, cmd, 0)
+	}
+}
+func showAddMenu() {
+	showMenu([]struct {
+		id       int
+		label    string
+		disabled bool
+	}{{114, "添加文件…", false}, {104, "添加文件夹…", false}}, controls[103])
+}
+func showMoreMenu() {
+	showMenu([]struct {
+		id       int
+		label    string
+		disabled bool
+	}{{110, "刷新", false}, {107, "打开本机存储位置", false}, {106, "移到回收站（仅本机）", !allLocal(chosen())}, {108, "使用说明与网络诊断", false}}, controls[113])
+}
+func drawFileRow(lp uintptr) {
+	d := (*struct {
+		Type, Control, Item, Action, State uint32
+		Window, DC                         uintptr
+		Bounds                             rect
+		Data                               uintptr
+	})(unsafe.Pointer(lp))
+	if d.Control != 100 || int(d.Item) >= len(shown) {
+		return
+	}
+	f := files[shown[d.Item]]
+	selected := d.State&1 != 0
+	bg, fg, sub := uintptr(0xffffff), uintptr(0x252525), uintptr(0x707070)
+	if selected {
+		bg = call(user, "GetSysColor", 13)
+		fg = call(user, "GetSysColor", 14)
+		sub = fg
+	}
+	gdi := syscall.NewLazyDLL("gdi32.dll")
+	brush := call(gdi, "CreateSolidBrush", bg)
+	call(user, "FillRect", d.DC, uintptr(unsafe.Pointer(&d.Bounds)), brush)
+	call(gdi, "DeleteObject", brush)
+	call(gdi, "SetBkMode", d.DC, 1)
+	old := call(gdi, "SelectObject", d.DC, font)
+	defer call(gdi, "SelectObject", d.DC, old)
+	dpi := call(user, "GetDpiForWindow", window)
+	if dpi == 0 {
+		dpi = 96
+	}
+	inset := int32(12 * dpi / 96)
+	r := d.Bounds
+	r.L += inset
+	r.R -= inset
+	width := r.R - r.L
+	starts := []int32{0, width * 39 / 100, width * 51 / 100, width * 76 / 100, width}
+	name, size, owner := f.Name, formatSize(f.Size), f.Owner
+	if f.IsDir {
+		name = "▸ " + name
+		size = "文件夹"
+	}
+	if f.Local {
+		owner += " · 本机"
+	}
+	labels := []string{name, size, owner, time.Unix(f.Modified, 0).Local().Format("2006/01/02 15:04")}
+	for i, label := range labels {
+		cell := rect{r.L + starts[i], r.T, r.L + starts[i+1] - inset, r.B}
+		color := sub
+		if i == 0 {
+			color = fg
+		}
+		call(gdi, "SetTextColor", d.DC, color)
+		call(user, "DrawTextW", d.DC, ptr(label), ^uintptr(0), uintptr(unsafe.Pointer(&cell)), 0x8824)
+	}
+	if d.State&0x10 != 0 {
+		call(user, "DrawFocusRect", d.DC, uintptr(unsafe.Pointer(&d.Bounds)))
+	}
+}
 func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 	switch m {
+	case 0x2b: // WM_DRAWITEM: roomy native rows, subdued source metadata.
+		drawFileRow(l)
+		return 1
 	case uiMessage:
 		for {
 			select {
@@ -763,6 +851,10 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 	case 0x111:
 		id := int(w & 0xffff)
 		notification := (w >> 16) & 0xffff
+		if id == 100 && notification == 1 {
+			updateSelectionActions()
+			return 0
+		}
 		if id == 100 && notification == 2 {
 			openSelected()
 			return 0
@@ -775,28 +867,28 @@ func wndProc(h uintptr, m uint32, w, l uintptr) uintptr {
 		case 101:
 			up()
 		case 102:
-			generation++
 			selectedPeer = nil
 			currentPath = ""
-			render()
-			refresh()
+			navigate()
 		case 103:
+			showAddMenu()
+		case 114:
 			importSources(pickFiles())
+		case 113:
+			showMoreMenu()
 		case 104:
 			if p := pickFolder("选择要添加的文件夹"); p != "" {
 				importSources([]string{p})
 			}
 		case 105:
-			if selectedPeer != nil {
-				ps := selectedPaths()
-				if len(ps) > 0 {
-					if p := pickFolder("选择另存到的位置"); p != "" {
-						action("/app/save", map[string]any{"peer": selectedPeer.ID, "paths": ps, "destination": p})
-					}
+			items := selectionItems(chosen())
+			if len(items) > 0 {
+				if p := pickFolder("选择另存到的位置"); p != "" {
+					action("/app/save", map[string]any{"items": items, "destination": p})
 				}
 			}
 		case 106:
-			if selectedPeer != nil && selectedPeer.Local {
+			if allLocal(chosen()) {
 				ps := selectedPaths()
 				if len(ps) > 0 && message("移到回收站", fmt.Sprintf("将选中的 %d 个项目移到回收站？", len(ps)), 0x24) == 6 {
 					go func() {
@@ -894,7 +986,7 @@ func listProc(h uintptr, m uint32, w, l uintptr) uintptr {
 			refresh()
 			return 0
 		}
-		if w == 0x2E && selectedPeer != nil && selectedPeer.Local {
+		if w == 0x2E && allLocal(chosen()) {
 			call(user, "PostMessageW", window, 0x111, 106, 0)
 			return 0
 		}
@@ -1034,20 +1126,25 @@ func main() {
 	}
 	setUIFont(uint32(call(user, "GetDpiForWindow", window)))
 	defer call(syscall.NewLazyDLL("gdi32.dll"), "DeleteObject", font)
-	breadcrumb = control("STATIC", "所有电脑", 0, 0)
+	heading = control("STATIC", "共享空间", 0, 0)
+	destination = control("STATIC", "", 0, 0)
+	for i, label := range []string{"名称", "大小", "位置", "修改时间"} {
+		columnLabels[i] = control("STATIC", label, 0, 0)
+	}
+	breadcrumb = control("STATIC", "所有文件", 0, 0)
 	for _, b := range []struct {
 		id    int
 		label string
-	}{{101, "返回上级"}, {102, "所有电脑"}, {103, "添加文件…"}, {104, "添加文件夹…"}, {105, "另存到…"}, {106, "删除"}, {107, "打开本机存储位置"}, {108, "帮助"}, {110, "刷新"}, {111, "重试失败任务"}, {112, "取消进行任务"}} {
+	}{{101, "←"}, {102, "共享空间"}, {103, "添加…"}, {105, "另存到…"}, {113, "更多"}, {111, "重试"}, {112, "取消任务"}} {
 		control("BUTTON", b.label, 0x10000, b.id)
 	}
 	filter = control("EDIT", "", 0x00810080, 109)
 	call(user, "SendMessageW", filter, 0x1501, 0, ptr("搜索当前列表"))
-	list = control("LISTBOX", "文件和电脑列表", 0x00b109c1, 100)
-	tabs := []int32{270, 340}
-	call(user, "SendMessageW", list, 0x192, 2, uintptr(unsafe.Pointer(&tabs[0])))
+	list = control("LISTBOX", "共享空间文件列表", 0x00b109d1, 100)
+	tabs := []int32{180, 230, 325}
+	call(user, "SendMessageW", list, 0x192, 3, uintptr(unsafe.Pointer(&tabs[0])))
 	call(user, "SendMessageW", list, 0x194, 1600, 0)
-	status = control("STATIC", "双击电脑名称进入。文件拖出始终复制，原文件保留。", 0, 0)
+	status = control("STATIC", "文件拖出始终复制，原文件保留。", 0, 0)
 	jobsBox = control("EDIT", "", 0x00200844, 0)
 	emptyLabel = control("STATIC", "", 0, 0)
 	oldListProc = call(user, "SetWindowLongPtrW", list, ^uintptr(3), syscall.NewCallback(listProc))
