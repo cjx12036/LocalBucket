@@ -6,7 +6,7 @@ import hashlib, importlib.util, json, os, plistlib, shlex, shutil, struct, subpr
 APP=Path(__file__).resolve().parent
 REPO=APP.parent
 DIST=APP/'dist'
-VERSION='0.2.0'
+VERSION='0.2.1'
 GO=shutil.which('go') or '/opt/homebrew/bin/go'
 
 def run(args,**kwargs):
@@ -49,8 +49,8 @@ def main():
     icons()
     resource={
         'RT_GROUP_ICON':{'#1':{'0000':'LocalBucket.ico'}},
-        'RT_MANIFEST':{'#1':{'0409':{'identity':{'name':'LocalBucket','version':'0.2.0.0'},'minimum-os':'win10','execution-level':'','dpi-awareness':'per monitor v2','use-common-controls-v6':True,'long-path-aware':True}}},
-        'RT_VERSION':{'#1':{'0409':{'fixed':{'file_version':'0.2.0.0','product_version':'0.2.0.0'},'info':{'0409':{'ProductName':'LocalBucket','FileDescription':'LocalBucket LAN file sharing','FileVersion':VERSION,'ProductVersion':VERSION,'OriginalFilename':'LocalBucket.exe'}}}}}
+        'RT_MANIFEST':{'#1':{'0409':{'identity':{'name':'LocalBucket','version':'0.2.1.0'},'minimum-os':'win10','execution-level':'','dpi-awareness':'per monitor v2','use-common-controls-v6':True,'long-path-aware':True}}},
+        'RT_VERSION':{'#1':{'0409':{'fixed':{'file_version':'0.2.1.0','product_version':'0.2.1.0'},'info':{'0409':{'ProductName':'LocalBucket','FileDescription':'LocalBucket LAN file sharing','FileVersion':VERSION,'ProductVersion':VERSION,'OriginalFilename':'LocalBucket.exe'}}}}}
     }
     (APP/'resources/winres.json').write_text(json.dumps(resource,indent=2)+'\n')
     run([GO,'run','github.com/tc-hib/go-winres@v0.3.3','make','--in',APP/'resources/winres.json','--out',APP/'cmd/localbucket/rsrc','--arch','amd64'],cwd=APP)

@@ -278,9 +278,10 @@ func layout() {
 	}
 	s := func(v int) int { return v * int(dpi) / 96 }
 	m := s(24)
-	move(heading, m, s(20), w-2*m-s(330), s(30))
-	move(controls[103], w-m-s(304), s(18), s(110), s(34))
-	move(controls[105], w-m-s(184), s(18), s(110), s(34))
+	move(heading, m, s(20), w-2*m-s(420), s(30))
+	move(controls[103], w-m-s(394), s(18), s(110), s(34))
+	move(controls[105], w-m-s(274), s(18), s(110), s(34))
+	move(controls[106], w-m-s(154), s(18), s(80), s(34))
 	move(controls[113], w-m-s(64), s(18), s(64), s(34))
 	move(controls[101], m, s(72), s(50), s(30))
 	move(controls[102], m+s(56), s(72), s(82), s(30))
@@ -377,6 +378,7 @@ func updateSelectionActions() {
 		enabled = 1
 	}
 	call(user, "EnableWindow", controls[105], enabled)
+	call(user, "EnableWindow", controls[106], map[bool]uintptr{true: 1, false: 0}[allLocal(chosen())])
 }
 func destinationPeer() string {
 	if selectedPeer != nil {
@@ -750,7 +752,7 @@ func showMoreMenu() {
 		id       int
 		label    string
 		disabled bool
-	}{{110, "刷新", false}, {107, "打开本机存储位置", false}, {106, "移到回收站（仅本机）", !allLocal(chosen())}, {108, "使用说明与网络诊断", false}}, controls[113])
+	}{{110, "刷新", false}, {107, "打开本机存储位置", false}, {108, "使用说明与网络诊断", false}}, controls[113])
 }
 func drawFileRow(lp uintptr) {
 	d := (*struct {
@@ -1135,7 +1137,7 @@ func main() {
 	for _, b := range []struct {
 		id    int
 		label string
-	}{{101, "←"}, {102, "共享空间"}, {103, "添加…"}, {105, "另存到…"}, {113, "更多"}, {111, "重试"}, {112, "取消任务"}} {
+	}{{101, "←"}, {102, "共享空间"}, {103, "添加…"}, {105, "另存到…"}, {106, "删除…"}, {113, "更多"}, {111, "重试"}, {112, "取消任务"}} {
 		control("BUTTON", b.label, 0x10000, b.id)
 	}
 	filter = control("EDIT", "", 0x00810080, 109)

@@ -27,7 +27,7 @@ The Location column shows which computer holds each entry. Double-click a folder
 
 - **One view, no automatic synchronization.** Files stay on their original computer and become unavailable when it goes offline. Each computer does not keep a full replica.
 - Importing identical files again skips duplicates. Different content with the same name gets a numbered copy.
-- Only local files can be deleted, and they go to the system Trash/Recycle Bin.
+- Only local files can be deleted, and they go to the system Trash/Recycle Bin. Windows has a visible Delete button in the top toolbar.
 - Closing the window stops sharing and exits. Stored files remain for the next launch.
 - LAN access has no password. Devices that can reach the service can read and upload files; share only content you intend others on that network to access.
 
