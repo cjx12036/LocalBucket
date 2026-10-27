@@ -1,0 +1,6 @@
+{
+  "status": "design preview; not integrated",
+  "tool": "built-in image_gen",
+  "prompt": "Use case: logo-brand. Asset type: one desktop app icon concept for LocalBucket, a lightweight local-network file sharing app on macOS and Windows. Primary request: create a polished, distinctive app icon that communicates a personal storage bucket holding files shared between nearby computers. Subject: a single elegant open storage bucket with two simple file cards tucked inside; integrate a subtle pair of flowing inward/outward curves into the bucket silhouette to suggest copying in and out, without clutter. Style: premium restrained desktop application icon, softly dimensional, precise rounded forms, balanced lighting, crisp silhouette that remains readable at small sizes. Composition: one centered icon only, generous clear margin, no presentation board or surrounding mockups. Let materials and colors support the simple storage metaphor, avoid rainbow gradients, busy networking diagrams, tiny symbols, computers, padlocks, letters, words, watermarks or any text. The outer background must be fully transparent; retain clean antialiased edges. This is a design preview, not a finalized OS icon bundle.",
+  "file": "assets/icons/localbucket-concept-v1.png"
+}
