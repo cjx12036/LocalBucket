@@ -1,0 +1,47 @@
+name: Verify native LocalBucket
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  core:
+    strategy:
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: app/go.sum
+      - name: Verify shared rules and permissions on native OS
+        run: go test ./internal/node ./cmd/node
+      - name: Compile native macOS interface
+        if: runner.os == 'macOS'
+        run: swiftc -framework AppKit -framework UniformTypeIdentifiers -O macos/LocalBucket.swift -o "$RUNNER_TEMP/LocalBucket-ui-check"
+      - name: Build and start Windows EXE
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $download = Join-Path $env:RUNNER_TEMP 'dufs.zip'
+          Invoke-WebRequest 'https://github.com/sigoden/dufs/releases/download/v0.47.0/dufs-v0.47.0-x86_64-pc-windows-msvc.zip' -OutFile $download
+          $extract = Join-Path $env:RUNNER_TEMP 'dufs-extracted'
+          Expand-Archive $download $extract
+          Get-ChildItem $extract -Recurse -Filter dufs.exe | Select-Object -First 1 | Copy-Item -Destination cmd/localbucket/dufs.exe
+          Copy-Item "$env:WINDIR/System32/vcruntime140.dll" cmd/localbucket/vcruntime140.dll
+          go build -ldflags='-H windowsgui' -o "$env:RUNNER_TEMP/LocalBucket.exe" ./cmd/localbucket
+          if ($LASTEXITCODE -ne 0) { throw 'Windows GUI build failed' }
+          $process = Start-Process "$env:RUNNER_TEMP/LocalBucket.exe" -PassThru
+          try {
+            $info = $null
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              try { $info = Invoke-RestMethod 'http://127.0.0.1:47931/v1/info' -TimeoutSec 1; break } catch { Start-Sleep -Milliseconds 500 }
+            }
+            if (!$info -or $info.id.Length -ne 32 -or $info.version -ne '0.1.0') { throw 'EXE did not start its node service' }
+            Write-Output 'Windows GUI EXE launched and its embedded node responded. Explorer drag/drop and SmartScreen are not tested here.'
+          } finally {
+            taskkill /PID $process.Id /T /F
+          }

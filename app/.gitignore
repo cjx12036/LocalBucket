@@ -1,0 +1,9 @@
+dist/
+resources/*.exe
+resources/*.dll
+resources/dufs
+resources/*.ico
+resources/*.icns
+cmd/localbucket/*.exe
+cmd/localbucket/*.dll
+cmd/localbucket/*.syso
