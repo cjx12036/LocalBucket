@@ -1,0 +1,5 @@
+dist/
+vendor/dufs-macos
+windows/dufs.exe
+windows/vcruntime140.dll
+runtime/

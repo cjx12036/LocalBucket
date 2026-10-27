@@ -1,0 +1,2 @@
+LocalBucket drag-and-drop fixture
+中文文件名，复制后原文件应保留。
