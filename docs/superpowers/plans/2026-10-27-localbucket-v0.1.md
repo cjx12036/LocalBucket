@@ -54,3 +54,12 @@ Files: `app/build.py`, root README, app docs and release scripts.
 
 ## Execution ledger
 Ruling: User explicitly said start development after design approval; execute continuously without another plan approval prompt. Use current clean checkout on `codex/localbucket-v0.1` to preserve known build assets; no parallel checkout consumers. Native UIs own disjoint files and share only the fixed API contract; core integration remains with the primary agent.
+
+Task 1: complete — regression tests were observed failing before safe-import implementation and fixes; race suite green.
+Task 2: complete — actual Dufs download/shutdown, two-node transfers, management isolation and UDP discovery pass. Startup multicast blocking and port-error cleanup reproduced and fixed. A regression covers root delete, root links, numbered names, ZIP links/empty dirs and reserved Dufs routes.
+Task 3: complete for candidate delivery — Swift compiles; Mac UI navigation, same-content API import, native Trash and exit checked. Coordinate drag automation was unavailable; physical drag regression remains explicit.
+Task 4: complete for candidate delivery — native Win64 GUI build, actual Windows CI service startup and shared tests pass. New Win10 Explorer interaction remains device verification.
+Task 5: candidate build and independent review complete — icon formats embedded, signatures/checksums inspected, CI green. Current Windows package is unsigned; SmartScreen is a release identity prerequisite, not marked solved. Existing user instruction to upload to GitHub for downloading authorizes pushing the feature branch and preparing a prerelease; main is left for PR review.
+
+Ruling: Dufs handles ordinary file delivery; node generates directory ZIPs so links are filtered consistently and empty dirs are preserved. Dufs internal route prefixes use direct file delivery to avoid collisions with real user filenames.
+Ruling: macOS Trash uses a bundled native Foundation helper; direct `.Trash` enumeration was denied during real UI testing and was replaced without requiring broader disk permissions.

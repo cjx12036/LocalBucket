@@ -32,4 +32,4 @@ Windows 远端文件第一次拖出时需要先准备下载缓存；界面提示
 
 未配置受信任 Windows 签名时，产物仍是未签名测试版，SmartScreen 可能提示。新文件即使有有效签名也不能保证立即无提示，参见 [微软说明](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation)。程序不关闭或绕过系统保护。
 
-自动测试：`cd app && go test -race ./internal/node`。设置 `LOCALBUCKET_TEST_DUFS` 为 Mac Dufs 路径可运行真实文件服务下载／退出集成测试。Windows 编译成功不代表已经在 Win10 运行验证。
+自动测试：`cd app && go test -race ./internal/node`。设置 `LOCALBUCKET_TEST_DUFS` 为 Mac Dufs 路径可运行真实文件服务下载／退出集成测试，`LOCALBUCKET_TEST_DISCOVERY=1` 开启实际 UDP 发现测试。Windows runner 已执行共享测试和 EXE 启动检查；这不替代 Win10 资源管理器拖放实测。详见仓库 `docs/validation-v0.1.md`。
