@@ -92,7 +92,8 @@ func TestServiceLocalJobsAndShutdown(t *testing.T) {
 	s := startTest(t)
 	src := filepath.Join(t.TempDir(), "中文.txt")
 	os.WriteFile(src, []byte("data"), 0600)
-	req, _ := http.NewRequest("POST", s.AdminURL+"/app/import", strings.NewReader(`{"peer":"`+s.Self.ID+`","path":"","sources":["`+src+`"]}`))
+	body, _ := json.Marshal(map[string]any{"peer": s.Self.ID, "path": "", "sources": []string{src}})
+	req, _ := http.NewRequest("POST", s.AdminURL+"/app/import", strings.NewReader(string(body)))
 	req.Header.Set("Authorization", "Bearer "+s.Token)
 	res, e := http.DefaultClient.Do(req)
 	if e != nil {
